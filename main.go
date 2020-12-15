@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -13,18 +14,27 @@ import (
 
 func main() {
 	var (
-		recordSign = make(chan struct{})
-		quitSign   = make(chan os.Signal, 1)
-		dataChan   = make(chan data)
-		startTime  = time.Now()
+		recordSign      = make(chan struct{})
+		quitSign        = make(chan os.Signal, 1)
+		dataChan        = make(chan data)
+		printerQuitSign = make(chan struct{})
+		startTime       = time.Now()
+		ctx, cancel     = context.WithCancel(context.Background())
 	)
 
 	go keyPressListener(recordSign)
-	go printer(dataChan)
-	go genData(time.Second, dataChan, recordSign)
+	go genData(ctx, time.Second, dataChan, recordSign)
+	go func() {
+		printer(dataChan)
+		printerQuitSign <- struct{}{}
+	}()
 
 	signal.Notify(quitSign, syscall.SIGINT, syscall.SIGTERM)
 	<-quitSign
+	recordSign <- struct{}{}
+	cancel()
+	<-printerQuitSign
+
 	fmtTime := "2006/01/02 15:04:05"
 	fmt.Printf("\n%s - %s\n", startTime.Format(fmtTime), time.Now().Format(fmtTime))
 }
@@ -68,7 +78,7 @@ func printer(dataChan <-chan data) {
 	}
 }
 
-func genData(interval time.Duration, dataChan chan<- data, recordSign <-chan struct{}) {
+func genData(ctx context.Context, interval time.Duration, dataChan chan<- data, recordSign <-chan struct{}) {
 	var (
 		startTime  = time.Now()
 		prevTime   = time.Now()
@@ -82,6 +92,9 @@ func genData(interval time.Duration, dataChan chan<- data, recordSign <-chan str
 			recordFlag = false
 		case <-recordSign:
 			recordFlag = true
+		case <-ctx.Done():
+			close(dataChan)
+			return
 		}
 		curr := status{timeEscape: time.Since(startTime), timeEscapeBefore: time.Since(prevTime)}
 		if recordFlag {
