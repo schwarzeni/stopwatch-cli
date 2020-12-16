@@ -56,7 +56,7 @@ type data struct {
 func (d data) String() string {
 	var res string
 	for idx := range d.records {
-		res += d.records[idx].String() + "\n"
+		res += fmt.Sprintf("%d. %s\n", idx+1, d.records[idx].String())
 	}
 	res += "====\n"
 	res += d.curr.String()
