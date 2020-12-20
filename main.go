@@ -100,6 +100,7 @@ func genData(ctx context.Context, interval time.Duration, dataChan chan<- data, 
 		if recordFlag {
 			records = append(records, curr)
 			prevTime = time.Now()
+			curr.timeEscapeBefore = 0
 		}
 		dataChan <- data{curr: curr, records: records}
 	}
