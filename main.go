@@ -22,6 +22,12 @@ func main() {
 		ctx, cancel     = context.WithCancel(context.Background())
 	)
 
+	// pprof 性能分析
+	// _ "net/http/pprof"
+	// go func() {
+	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
+
 	go keyPressListener(recordSign)
 	go genData(ctx, time.Second, dataChan, recordSign)
 	go func() {
@@ -84,11 +90,15 @@ func genData(ctx context.Context, interval time.Duration, dataChan chan<- data, 
 		prevTime   = time.Now()
 		recordFlag bool
 		records    []status
+		ticker     = time.NewTicker(interval)
 	)
 
 	for {
 		select {
-		case <-time.Tick(interval):
+		// 循环中不能使用 time.Tick ，会造成泄漏，加重 CPU 的使用率和耗电
+		// 参见 https://pkg.go.dev/time#Tick 和 https://jesseduffield.com/adventures-in-profiling-with-go/
+		// case <-time.Tick(interval):
+		case <-ticker.C:
 			recordFlag = false
 		case <-recordSign:
 			recordFlag = true
