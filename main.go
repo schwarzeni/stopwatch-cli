@@ -92,6 +92,9 @@ func genData(ctx context.Context, interval time.Duration, dataChan chan<- data, 
 		records    []status
 		ticker     = time.NewTicker(interval)
 	)
+	defer func() {
+		ticker.Stop()
+	}()
 
 	for {
 		select {
