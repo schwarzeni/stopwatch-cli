@@ -15,8 +15,11 @@ import (
 func main() {
 	var (
 		recordSign      = make(chan struct{})
-		quitSign        = make(chan os.Signal, 1)
-		dataChan        = make(chan data)
+		stopSign        = make(chan struct{})
+		resumeSign      = make(chan struct{})
+		stopFlag        = false
+		interuptSign    = make(chan os.Signal, 1)
+		dataChan        = make(chan string)
 		printerQuitSign = make(chan struct{})
 		startTime       = time.Now()
 		ctx, cancel     = context.WithCancel(context.Background())
@@ -28,19 +31,44 @@ func main() {
 	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
 	// }()
 
-	go keyPressListener(recordSign)
-	go genData(ctx, time.Second, dataChan, recordSign)
+	go genData(ctx, time.Second, dataChan, recordSign, stopSign, resumeSign)
 	go func() {
 		printer(dataChan)
 		printerQuitSign <- struct{}{}
 	}()
 
-	signal.Notify(quitSign, syscall.SIGINT, syscall.SIGTERM)
-	<-quitSign
-	recordSign <- struct{}{}
-	cancel()
-	<-printerQuitSign
+	// 监听按键
+	go func() {
+		for {
+			consoleReader := bufio.NewReaderSize(os.Stdin, 1)
+			if input, _ := consoleReader.ReadByte(); input == 10 {
+				// 回车键
+				if stopFlag {
+					resumeSign <- struct{}{}
+					stopFlag = false
+				} else {
+					recordSign <- struct{}{}
+				}
+			}
+		}
+	}()
 
+	// 监听 ctrl+c
+	signal.Notify(interuptSign, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for {
+			<-interuptSign
+			if stopFlag {
+				cancel()
+				return
+			} else {
+				stopSign <- struct{}{}
+				stopFlag = true
+			}
+		}
+	}()
+
+	<-printerQuitSign
 	fmtTime := "2006/01/02 15:04:05"
 	fmt.Printf("\n%s - %s\n", startTime.Format(fmtTime), time.Now().Format(fmtTime))
 }
@@ -69,7 +97,7 @@ func (d data) String() string {
 	return res
 }
 
-func printer(dataChan <-chan data) {
+func printer(dataChan <-chan string) {
 	// fmt.Print("\033[H")
 	for currData := range dataChan {
 		clearCmd := exec.Command("clear")
@@ -84,13 +112,17 @@ func printer(dataChan <-chan data) {
 	}
 }
 
-func genData(ctx context.Context, interval time.Duration, dataChan chan<- data, recordSign <-chan struct{}) {
+func genData(ctx context.Context, interval time.Duration, dataChan chan<- string, recordSign <-chan struct{}, stopSign <-chan struct{}, resumeSign <-chan struct{}) {
 	var (
-		startTime  = time.Now()
-		prevTime   = time.Now()
-		recordFlag bool
-		records    []status
-		ticker     = time.NewTicker(interval)
+		startTime     = time.Now()
+		prevTime      = time.Now()
+		recordFlag    bool
+		records       []status
+		ticker        = time.NewTicker(interval)
+		quiting       = false
+		getCurrStatus = func() status {
+			return status{timeEscape: time.Since(startTime), timeEscapeBefore: time.Since(prevTime)}
+		}
 	)
 	defer func() {
 		ticker.Stop()
@@ -105,25 +137,32 @@ func genData(ctx context.Context, interval time.Duration, dataChan chan<- data, 
 			recordFlag = false
 		case <-recordSign:
 			recordFlag = true
+		case <-stopSign:
+			stopTime := time.Now()
+			dataChan <- (data{curr: getCurrStatus(), records: records}).String() + "\n已暂停，ctrl-c退出，回车键继续"
+			select {
+			case <-resumeSign:
+				dur := time.Since(stopTime)
+				prevTime = prevTime.Add(dur)
+				startTime = startTime.Add(dur)
+			case <-ctx.Done():
+				recordFlag = true
+				quiting = true
+			}
 		case <-ctx.Done():
-			close(dataChan)
-			return
+			recordFlag = true
+			quiting = true
 		}
-		curr := status{timeEscape: time.Since(startTime), timeEscapeBefore: time.Since(prevTime)}
+		curr := getCurrStatus()
 		if recordFlag {
 			records = append(records, curr)
 			prevTime = time.Now()
 			curr.timeEscapeBefore = 0
 		}
-		dataChan <- data{curr: curr, records: records}
-	}
-}
-
-func keyPressListener(recordSign chan<- struct{}) {
-	for {
-		consoleReader := bufio.NewReaderSize(os.Stdin, 1)
-		if input, _ := consoleReader.ReadByte(); input == 10 {
-			recordSign <- struct{}{}
+		dataChan <- (data{curr: curr, records: records}).String()
+		if quiting {
+			close(dataChan)
+			return
 		}
 	}
 }
